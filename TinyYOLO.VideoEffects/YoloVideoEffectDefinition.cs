@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Threading.Tasks;
@@ -26,7 +27,7 @@ namespace TinyYOLO.VideoEffects
         // Video Effect Fields
         private VideoEncodingProperties currentEncodingProperties;
         private CanvasDevice canvasDevice;
-        private IPropertySet configuration;
+        private IPropertySet currentConfiguration;
 
         // WinML Fields
         private LearningModelPreview model;
@@ -56,14 +57,19 @@ namespace TinyYOLO.VideoEffects
         // This is run for every video frame passed in the media pipleine (MediaPlayer, MediaCapture, etc)
         public async void ProcessFrame(ProcessVideoFrameContext context)
         {
-            ++frameCount;
+            frameCount = frameCount + 1;
 
             if(frameCount % 5 != 0)
                 return;
 
+            Debug.WriteLine($"ProcessFrame hit - FrameCount: {frameCount}");
+
             // wait for model to complete load
             if (isLoadingModel)
+            {
+                Debug.WriteLine($"isLoadingModel = {isLoadingModel}... returning from ProcessFrame early");
                 return;
+            }
 
             // Load the model, skips if already loaded.
             await LoadModelAsync();
@@ -72,10 +78,23 @@ namespace TinyYOLO.VideoEffects
             var boundingBoxes = await EvaluateVideoFrameAsync(context.InputFrame);
 
             if (boundingBoxes.Count <= 0)
+            {
+                Debug.WriteLine($"No Bounding Boxes Discovered... returning from ProcessFrame early.");
                 return;
+            }
 
             // Remove overalapping and low confidence bounding boxes
             var filteredBoxes = parser.NonMaxSuppress(boundingBoxes, 5, .5F);
+
+            if (filteredBoxes.Count <= 0)
+            {
+                Debug.WriteLine($"No filteredBoxes Discovered... returning from ProcessFrame early.");
+                return;
+            }
+            else
+            {
+                Debug.WriteLine($"{filteredBoxes.Count} Bounding Boxes remain after removing low confidence and overlapping boxes");
+            }
 
             // ********** Draw Boxes directly on VideoFrame ********** //
 
@@ -102,6 +121,8 @@ namespace TinyYOLO.VideoEffects
                         ds.DrawRectangle(new Rect(x, y, w, h), new CanvasSolidColorBrush(canvasDevice, Colors.Yellow), 2f);
                     }
                 }
+
+                return;
             }
 
             // TODO GPU Support
@@ -133,17 +154,25 @@ namespace TinyYOLO.VideoEffects
             if (model != null)
                 return;
 
+            Debug.WriteLine($"Loading Model");
+
             isLoadingModel = true;
 
             try
             {
                 // Load Model
                 var modelFile = await StorageFile.GetFileFromApplicationUriAsync(ModelUri);
+                Debug.WriteLine($"Model file discovered at: {modelFile.Path}");
+
                 model = await LearningModelPreview.LoadModelFromStorageFileAsync(modelFile);
+                Debug.WriteLine($"LearningModelPReview object instantiated: {modelFile.Path}");
 
                 // Retrieve model input and output variable descriptions (we already know the model takes an image in and outputs a tensor)
                 var inputFeatures = model.Description.InputFeatures.ToList();
+                Debug.WriteLine($"{inputFeatures.Count} Input Features");
+
                 var outputFeatures = model.Description.OutputFeatures.ToList();
+                Debug.WriteLine($"{inputFeatures.Count} Output Features");
 
                 inputImageDescription = inputFeatures.FirstOrDefault(feature => feature.ModelFeatureKind == LearningModelFeatureKindPreview.Image)
                     as ImageVariableDescriptorPreview;
@@ -154,6 +183,7 @@ namespace TinyYOLO.VideoEffects
             catch (Exception ex)
             {
                 Status = $"Error loading model: {ex.Message}";
+                Debug.WriteLine($"Error loading model: {ex.Message}");
                 model = null;
             }
             finally
@@ -188,6 +218,7 @@ namespace TinyYOLO.VideoEffects
                 var boxes = parser.ParseOutputs(resultProbabilities?.ToArray(), .3F);
 
                 Status = $"Model Evaluation Completed. Boxes: {boxes.Count}";
+                Debug.WriteLine($"Model Evaluation Completed. Bounding Boxes: {boxes.Count}");
 
                 return boxes;
             }
@@ -200,9 +231,9 @@ namespace TinyYOLO.VideoEffects
         
         // ********** IBasicVideoEffect ********** //
 
-        public void SetProperties(IPropertySet config)
+        public void SetProperties(IPropertySet configuration)
         {
-            this.configuration = config;
+            this.currentConfiguration = configuration;
         }
 
         public async void SetEncodingProperties(VideoEncodingProperties encodingProperties, IDirect3DDevice device)
@@ -220,19 +251,13 @@ namespace TinyYOLO.VideoEffects
         {
             canvasDevice?.Dispose();
         }
+        
+        public MediaMemoryTypes SupportedMemoryTypes => EffectConstants.SupportedMemoryTypes;
 
-        public void DiscardQueuedFrames()
-        {
-            // no frames to discard
-        }
-
-        public bool IsReadOnly { get; }
-
-        public IReadOnlyList<VideoEncodingProperties> SupportedEncodingProperties { get; }
-
-        // TODO Add support for GPU frames, switch to MediaMemoryTypes.CpuAndGpu
-        public MediaMemoryTypes SupportedMemoryTypes { get; } = MediaMemoryTypes.Cpu;
-
-        public bool TimeIndependent { get; }
+        public IReadOnlyList<VideoEncodingProperties> SupportedEncodingProperties => EffectConstants.SupportedEncodingProperties;
+        
+        public bool IsReadOnly => false;
+        public bool TimeIndependent => false;
+        public void DiscardQueuedFrames() { }
     }
 }

@@ -107,6 +107,7 @@
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="Helpers\EffectsConstants.cs" />
     <Compile Include="Helpers\Extensions.cs" />
     <Compile Include="Models\TinyYOLOModel.cs" />
     <Compile Include="Models\TinyYOLOModelInput.cs" />
@@ -114,6 +115,7 @@
     <Compile Include="Models\YoloBoundingBox.cs" />
     <Compile Include="Models\YoloWinMlParser.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="SepiaVideoEffect.cs" />
     <Compile Include="YoloVideoEffectDefinition.cs" />
   </ItemGroup>
   <ItemGroup>
