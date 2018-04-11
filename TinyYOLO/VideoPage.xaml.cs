@@ -54,11 +54,6 @@ namespace TinyYOLO
             await ApplyVideoEffectAsync();
         }
 
-        //private async void ClearEffectButton_OnClick(object sender, RoutedEventArgs e)
-        //{
-        //    await ClearVideoEffectsAsync();
-        //}
-
         #endregion
         
         #region Video effect selection, creation and management
@@ -95,18 +90,7 @@ namespace TinyYOLO
             await mediaCapture.ClearEffectsAsync(MediaStreamType.VideoPreview);
             previewEffect = null;
         }
-
-        private void UpdateEffect()
-        {
-            // Update Video Effect's values
-            if (PageViewModel.SelectedEffect == null || effectPropertySet == null)
-                return;
-
-            // Hard coding the Sepia effect. This is just to validate whether or not he video effect is being applied to the video stream
-            PageViewModel.SelectedEffect.PropertyValue = 0.5f;
-            effectPropertySet[PageViewModel.SelectedEffect.PropertyName] = (float)PageViewModel.SelectedEffect.PropertyValue;
-        }
-
+        
         #endregion
 
         #region MediaCapture initialization and disposal
