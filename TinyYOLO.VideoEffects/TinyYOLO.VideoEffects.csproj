@@ -116,7 +116,7 @@
     <Compile Include="Models\YoloWinMlParser.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SepiaVideoEffect.cs" />
-    <Compile Include="YoloVideoEffect.cs" />
+    <Compile Include="TinyYoloVideoEffect.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NETCore.UniversalWindowsPlatform">

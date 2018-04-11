@@ -19,7 +19,7 @@ using TinyYOLO.VideoEffects.Models;
 
 namespace TinyYOLO.VideoEffects
 {
-    public sealed class YoloVideoEffect : IBasicVideoEffect
+    public sealed class TinyYoloVideoEffect : IBasicVideoEffect
     {
         // ** Fields ** //
 

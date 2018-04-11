@@ -19,7 +19,7 @@ namespace TinyYOLO.ViewModels
         public ObservableCollection<VideoEffectItem> VideoEffects => videoEffects ?? (videoEffects = new ObservableCollection<VideoEffectItem>
         {
             new VideoEffectItem(null, "None"),
-            new VideoEffectItem(typeof(YoloVideoEffect), "TinyYolo"),
+            new VideoEffectItem(typeof(TinyYoloVideoEffect), "TinyYolo"),
             new VideoEffectItem(typeof(SepiaVideoEffect), "Sepia", "Sepia", 0.5f, 1f)
         });
 
