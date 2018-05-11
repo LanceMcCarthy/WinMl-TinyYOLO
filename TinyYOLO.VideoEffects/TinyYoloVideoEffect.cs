@@ -33,12 +33,27 @@ namespace TinyYOLO.VideoEffects
         private ImageVariableDescriptorPreview inputImageDescription;
         private TensorVariableDescriptorPreview outputTensorDescription;
         private YoloWinMlParser parser;
+        private IList<YoloBoundingBox> filteredBoxes;
 
         // General
         private bool isLoadingModel;
-        private int frameCount = 0;
+        private bool isEvaluating;
         
         // ** Properties ** //
+
+        /// <summary>
+        /// Value that determines how many seconds to wait between processing frames
+        /// </summary>
+        private int ProcessInterval
+        {
+            get
+            {
+                if (currentConfiguration != null && currentConfiguration.ContainsKey("ProcessInterval"))
+                    return (int)currentConfiguration["ProcessInterval"];
+
+                return 5;
+            }
+        }
 
         /// <summary>
         /// The path for the model file
@@ -49,93 +64,72 @@ namespace TinyYOLO.VideoEffects
         // ** Methods ** //
 
         // This is run for every video frame passed in the media pipleine (MediaPlayer, MediaCapture, etc)
-        public async void ProcessFrame(ProcessVideoFrameContext context)
+        public void ProcessFrame(ProcessVideoFrameContext context)
         {
-            frameCount = frameCount + 1;
+            bool evaluationAllowed = context.InputFrame.RelativeTime?.Seconds % ProcessInterval == 0;
 
-            // only do every 20 frames (this will likely have to be tweaked
-            if (frameCount % 20 != 0)
-                return;
-
-            Debug.WriteLine($"ProcessFrame hit - FrameCount: {frameCount}");
-
-            // wait for model to complete load
-            if (isLoadingModel)
+            // Evaluate every 
+            if (evaluationAllowed && !isLoadingModel && !isEvaluating)
             {
-                Debug.WriteLine($"isLoadingModel = {isLoadingModel}... returning from ProcessFrame early");
-                return;
+                // ************ WinML Evaluate Frame ************ //
+
+                isEvaluating = true;
+                
+                Debug.WriteLine($"RelativeTime in Seconds: {context.InputFrame.RelativeTime?.Seconds}");
+
+                var binding = new LearningModelBindingPreview(model); // Create bindings for the input and output buffer
+                var outputArray = new List<float>(); // R4 WinML does needs the output pre-allocated for multi-dimensional tensors
+                outputArray.AddRange(new float[21125]);  // Total size of TinyYOLO output
+
+                binding.Bind(inputImageDescription.Name, context.InputFrame);
+                binding.Bind(outputTensorDescription.Name, outputArray);
+
+                // Need to figure out a way to make this work here Task.Run or similar, that only updates the value of 
+                // filteredBoxes when this is done
+                // var results = await model.EvaluateAsync(binding, "TinyYOLO");
+
+                // workaround, force syncronous operation
+                var evalTask = model.EvaluateAsync(binding, "TinyYOLO"); // Process the frame with the model
+                evalTask.AsTask().Wait();
+                var results = evalTask.GetResults();
+
+                var resultProbabilities = results.Outputs[outputTensorDescription.Name] as List<float>;
+
+                // Use out helper to parse to the YOLO outputs into bounding boxes with labels
+                var boxes = parser.ParseOutputs(resultProbabilities?.ToArray());
+            
+                // Remove overlapping and low confidence bounding boxes
+                filteredBoxes = parser.NonMaxSuppress(boxes, 5, .5F);
+
+                Debug.WriteLine(filteredBoxes.Count <= 0 ? $"No Valid Bounding Boxes" : $"Valid Bounding Boxes: {filteredBoxes.Count}");
+
+                isEvaluating = false;
             }
             
-            // ************ WinML Evaluate Frame ************ //
-
-            var preStatus = context.InputFrame.Direct3DSurface != null ? "D3DSurface is valid" : "D3DSurface is null";
-            Debug.WriteLine($"PreEvaluate VideoFrame: {preStatus}");
-            
-            
-            var binding = new LearningModelBindingPreview(model); // Create bindings for the input and output buffer
-            var outputArray = new List<float>(); // R4 WinML does needs the output pre-allocated for multi-dimensional tensors
-            outputArray.AddRange(new float[21125]);  // Total size of TinyYOLO output
-
-            binding.Bind(inputImageDescription.Name, context.InputFrame);
-            binding.Bind(outputTensorDescription.Name, outputArray);
-            
-            var results = await model.EvaluateAsync(binding, "TinyYOLO"); // Process the frame with the model
-            var resultProbabilities = results.Outputs[outputTensorDescription.Name] as List<float>;
-
-            // Use out helper to parse to the YOLO outputs into bounding boxes with labels
-            var boxes = parser.ParseOutputs(resultProbabilities?.ToArray());
-            Debug.WriteLine($"Model Evaluation Completed. Bounding Boxes: {boxes.Count}");
-            
-
-            // ISSUE ******* frame is null after being used for WinML binding ***** //
-
-            var postStatus = context.InputFrame.Direct3DSurface != null ? "D3DSurface is valid" : "D3DSurface is null";
-            Debug.WriteLine($"PostEvaluate VideoFrame: {postStatus}");
-
-            // ******************************************************************** //
-
-
-            if (boxes.Count <= 0)
-            {
-                Debug.WriteLine($"No Bounding Boxes Discovered... returning from ProcessFrame early.");
-                return;
-            }
-
-            // Remove overlapping and low confidence bounding boxes
-            var filteredBoxes = parser.NonMaxSuppress(boxes, 5, .5F);
-
-            if (filteredBoxes.Count <= 0)
-            {
-                Debug.WriteLine($"No filteredBoxes Discovered... returning from ProcessFrame early.");
-                return;
-            }
-            else
-            {
-                Debug.WriteLine($"{filteredBoxes.Count} Bounding Boxes remain after removing low confidence and overlapping boxes");
-            }
-
             // ********** Draw Boxes with Win2D ********** //
 
             // IMPORTANT - InputFrame.Direct3DSurface if using CPU memory
             if (context.InputFrame.Direct3DSurface != null)
             {
-                using (var inputBitmap = CanvasBitmap.CreateFromDirect3D11Surface(canvasDevice, context.OutputFrame.Direct3DSurface))
-                using (var renderTarget = CanvasRenderTarget.CreateFromDirect3D11Surface(canvasDevice, context.InputFrame.Direct3DSurface))
+                using (var inputBitmap = CanvasBitmap.CreateFromDirect3D11Surface(canvasDevice, context.InputFrame.Direct3DSurface))
+                using (var renderTarget = CanvasRenderTarget.CreateFromDirect3D11Surface(canvasDevice, context.OutputFrame.Direct3DSurface))
                 using (var ds = renderTarget.CreateDrawingSession())
                 {
+                    ds.DrawImage(inputBitmap);
+
                     foreach (var box in filteredBoxes)
                     {
                         var x = (uint)Math.Max(box.X, 0);
                         var y = (uint)Math.Max(box.Y, 0);
-                        var w = (uint)Math.Min(context.OutputFrame.SoftwareBitmap.PixelWidth - x, box.Width);
-                        var h = (uint)Math.Min(context.OutputFrame.SoftwareBitmap.PixelHeight - y, box.Height);
+                        var w = (uint)Math.Min(renderTarget.Bounds.Width - x, box.Width);
+                        var h = (uint)Math.Min(renderTarget.Bounds.Height - y, box.Height);
 
                         // Draw the Text 10px above the top of the bounding box
                         ds.DrawText(box.Label, x, y - 10, Colors.Yellow);
                         ds.DrawRectangle(new Rect(x, y, w, h), new CanvasSolidColorBrush(canvasDevice, Colors.Yellow), 2f);
                     }
                 }
-
+                
                 return;
             }
 
@@ -150,6 +144,8 @@ namespace TinyYOLO.VideoEffects
                 using (var renderTarget = new CanvasRenderTarget(canvasDevice, context.OutputFrame.SoftwareBitmap.PixelWidth, context.InputFrame.SoftwareBitmap.PixelHeight, (float) context.OutputFrame.SoftwareBitmap.DpiX, context.OutputFrame.SoftwareBitmap.BitmapPixelFormat.ToDirectXPixelFormat(), CanvasAlphaMode.Premultiplied))
                 using (var ds = renderTarget.CreateDrawingSession())
                 {
+                    ds.DrawImage(inputBitmap);
+
                     foreach (var box in filteredBoxes)
                     {
                         var x = (uint)Math.Max(box.X, 0);
@@ -213,15 +209,14 @@ namespace TinyYOLO.VideoEffects
 
         public void SetProperties(IPropertySet configuration)
         {
-            Debug.WriteLine("SetProperties Executed");
             currentConfiguration = configuration;
         }
 
         public async void SetEncodingProperties(VideoEncodingProperties encodingProperties, IDirect3DDevice device)
         {
-            Debug.WriteLine("SetEncodingProperties Executed");
-
             currentEncodingProperties = encodingProperties;
+
+            filteredBoxes = new List<YoloBoundingBox>();
 
             canvasDevice = device != null ? CanvasDevice.CreateFromDirect3D11Device(device) : CanvasDevice.GetSharedDevice();
 
