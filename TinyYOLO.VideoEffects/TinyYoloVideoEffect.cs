@@ -3,14 +3,17 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.AI.MachineLearning.Preview;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
 using Windows.Graphics.DirectX.Direct3D11;
+using Windows.Media;
 using Windows.Media.Effects;
 using Windows.Media.MediaProperties;
 using Windows.Storage;
+using Windows.System.Threading;
 using Windows.UI;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Brushes;
@@ -37,24 +40,13 @@ namespace TinyYOLO.VideoEffects
 
         // General
         private bool isLoadingModel;
-        private bool isEvaluating;
-        
+        private readonly TimeSpan poolTimerInterval = TimeSpan.FromSeconds(2);
+        private ThreadPoolTimer frameProcessingTimer;
+        private readonly SemaphoreSlim semaphore = new SemaphoreSlim(1);
+        private VideoFrame evaluatableVideoFrame;
+
         // ** Properties ** //
-
-        /// <summary>
-        /// Value that determines how many seconds to wait between processing frames
-        /// </summary>
-        private int ProcessInterval
-        {
-            get
-            {
-                if (currentConfiguration != null && currentConfiguration.ContainsKey("ProcessInterval"))
-                    return (int)currentConfiguration["ProcessInterval"];
-
-                return 5;
-            }
-        }
-
+        
         /// <summary>
         /// The path for the model file
         /// </summary>
@@ -66,49 +58,11 @@ namespace TinyYOLO.VideoEffects
         // This is run for every video frame passed in the media pipleine (MediaPlayer, MediaCapture, etc)
         public void ProcessFrame(ProcessVideoFrameContext context)
         {
-            bool evaluationAllowed = context.InputFrame.RelativeTime?.Seconds % ProcessInterval == 0;
-
-            // Evaluate every 
-            if (evaluationAllowed && !isLoadingModel && !isEvaluating)
-            {
-                // ************ WinML Evaluate Frame ************ //
-
-                isEvaluating = true;
-                
-                Debug.WriteLine($"RelativeTime in Seconds: {context.InputFrame.RelativeTime?.Seconds}");
-
-                var binding = new LearningModelBindingPreview(model); // Create bindings for the input and output buffer
-                var outputArray = new List<float>(); // R4 WinML does needs the output pre-allocated for multi-dimensional tensors
-                outputArray.AddRange(new float[21125]);  // Total size of TinyYOLO output
-
-                binding.Bind(inputImageDescription.Name, context.InputFrame);
-                binding.Bind(outputTensorDescription.Name, outputArray);
-
-                // Need to figure out a way to make this work here Task.Run or similar, that only updates the value of 
-                // filteredBoxes when this is done
-                // var results = await model.EvaluateAsync(binding, "TinyYOLO");
-
-                // workaround, force syncronous operation
-                var evalTask = model.EvaluateAsync(binding, "TinyYOLO"); // Process the frame with the model
-                evalTask.AsTask().Wait();
-                var results = evalTask.GetResults();
-
-                var resultProbabilities = results.Outputs[outputTensorDescription.Name] as List<float>;
-
-                // Use out helper to parse to the YOLO outputs into bounding boxes with labels
-                var boxes = parser.ParseOutputs(resultProbabilities?.ToArray());
+            evaluatableVideoFrame = VideoFrame.CreateWithDirect3D11Surface(context.InputFrame.Direct3DSurface);
             
-                // Remove overlapping and low confidence bounding boxes
-                filteredBoxes = parser.NonMaxSuppress(boxes, 5, .5F);
+            // ********** Draw Bounding Boxes with Win2D ********** //
 
-                Debug.WriteLine(filteredBoxes.Count <= 0 ? $"No Valid Bounding Boxes" : $"Valid Bounding Boxes: {filteredBoxes.Count}");
-
-                isEvaluating = false;
-            }
-            
-            // ********** Draw Boxes with Win2D ********** //
-
-            // IMPORTANT - InputFrame.Direct3DSurface if using CPU memory
+            // Use Direct3DSurface if using GPU memory
             if (context.InputFrame.Direct3DSurface != null)
             {
                 using (var inputBitmap = CanvasBitmap.CreateFromDirect3D11Surface(canvasDevice, context.InputFrame.Direct3DSurface))
@@ -133,7 +87,7 @@ namespace TinyYOLO.VideoEffects
                 return;
             }
 
-            // IMPORTANT - InputFrame.SoftwareBitmap if using CPU memory
+            // Use SoftwareBitmap if using CPU memory
             if (context.InputFrame.SoftwareBitmap != null)
             {
                 // InputFrame's raw pixels
@@ -160,6 +114,55 @@ namespace TinyYOLO.VideoEffects
                 }
             }
         }
+
+        // This method is executed by the ThreadPoolTimer, it performs the evaluation on a copy of the VideoFrame
+        private async void EvaluateVideoFrame(ThreadPoolTimer timer)
+        {
+            // If a lock is being held, or WinML isn't fully initialized, return
+            if (!semaphore.Wait(0) || isLoadingModel)
+                return;
+
+            try
+            {
+                using (evaluatableVideoFrame)
+                {
+                    // ************ WinML Evaluate Frame ************ //
+
+                    Debug.WriteLine($"RelativeTime in Seconds: {evaluatableVideoFrame.RelativeTime?.Seconds}");
+
+                    var binding = new LearningModelBindingPreview(model); // Create bindings for the input and output buffer
+                    var outputArray = new List<float>(); // R4 WinML does needs the output pre-allocated for multi-dimensional tensors
+                    outputArray.AddRange(new float[21125]);  // Total size of TinyYOLO output
+
+                    binding.Bind(inputImageDescription.Name, evaluatableVideoFrame);
+                    binding.Bind(outputTensorDescription.Name, outputArray);
+
+                    // Need to figure out a way to make this work here Task.Run or similar, that only updates the value of 
+                    // filteredBoxes when this is done
+                    var results = await model.EvaluateAsync(binding, "TinyYOLO");
+
+                    var resultProbabilities = results.Outputs[outputTensorDescription.Name] as List<float>;
+
+                    // Use out helper to parse to the YOLO outputs into bounding boxes with labels
+                    var boxes = parser.ParseOutputs(resultProbabilities?.ToArray());
+
+                    // Remove overlapping and low confidence bounding boxes
+                    filteredBoxes = parser.NonMaxSuppress(boxes, 5, .5F);
+
+                    Debug.WriteLine(filteredBoxes.Count <= 0 ? $"No Valid Bounding Boxes" : $"Valid Bounding Boxes: {filteredBoxes.Count}");
+
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"EvaluateFrameException: {ex}");
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }
+
 
         // Loads the ML model file and sets 
         private async Task LoadModelAsync()
@@ -218,6 +221,8 @@ namespace TinyYOLO.VideoEffects
 
             filteredBoxes = new List<YoloBoundingBox>();
 
+            frameProcessingTimer = ThreadPoolTimer.CreatePeriodicTimer(EvaluateVideoFrame, poolTimerInterval);
+
             canvasDevice = device != null ? CanvasDevice.CreateFromDirect3D11Device(device) : CanvasDevice.GetSharedDevice();
 
             parser = new YoloWinMlParser();
@@ -228,6 +233,8 @@ namespace TinyYOLO.VideoEffects
         public void Close(MediaEffectClosedReason reason)
         {
             canvasDevice?.Dispose();
+            semaphore?.Dispose();
+            frameProcessingTimer?.Cancel();
         }
         
         public MediaMemoryTypes SupportedMemoryTypes => EffectConstants.SupportedMemoryTypes;
