@@ -33,38 +33,45 @@ namespace TinyYOLO.VideoEffects
 
         // WinML Fields
         private LearningModelPreview model;
+        private LearningModelBindingPreview binding;
+        private InferencingOptionsPreview options;
         private ImageVariableDescriptorPreview inputImageDescription;
         private TensorVariableDescriptorPreview outputTensorDescription;
         private YoloWinMlParser parser;
         private IList<YoloBoundingBox> filteredBoxes;
+        private List<float> outputArray;
 
         // General
-        private bool isLoadingModel;
+        //private bool isLoadingModel;
+        private bool modelBindingComplete;
         private readonly TimeSpan poolTimerInterval = TimeSpan.FromSeconds(2);
         private ThreadPoolTimer frameProcessingTimer;
         private readonly SemaphoreSlim semaphore = new SemaphoreSlim(1);
         private VideoFrame evaluatableVideoFrame;
 
         // ** Properties ** //
-        
+
         /// <summary>
         /// The path for the model file
         /// </summary>
         public Uri ModelUri { get; set; } = new Uri("ms-appx:///Assets/TinyYOLO.onnx");
-        
-        
+
+
         // ** Methods ** //
 
         // This is run for every video frame passed in the media pipleine (MediaPlayer, MediaCapture, etc)
         public void ProcessFrame(ProcessVideoFrameContext context)
         {
             evaluatableVideoFrame = VideoFrame.CreateWithDirect3D11Surface(context.InputFrame.Direct3DSurface);
-            
+
             // ********** Draw Bounding Boxes with Win2D ********** //
 
             // Use Direct3DSurface if using GPU memory
             if (context.InputFrame.Direct3DSurface != null)
             {
+                if(modelBindingComplete && options.PreferredDeviceKind != LearningModelDeviceKindPreview.LearningDeviceGpu)
+                    options.PreferredDeviceKind = LearningModelDeviceKindPreview.LearningDeviceGpu;
+
                 using (var inputBitmap = CanvasBitmap.CreateFromDirect3D11Surface(canvasDevice, context.InputFrame.Direct3DSurface))
                 using (var renderTarget = CanvasRenderTarget.CreateFromDirect3D11Surface(canvasDevice, context.OutputFrame.Direct3DSurface))
                 using (var ds = renderTarget.CreateDrawingSession())
@@ -83,19 +90,22 @@ namespace TinyYOLO.VideoEffects
                         ds.DrawRectangle(new Rect(x, y, w, h), new CanvasSolidColorBrush(canvasDevice, Colors.Yellow), 2f);
                     }
                 }
-                
+
                 return;
             }
 
             // Use SoftwareBitmap if using CPU memory
             if (context.InputFrame.SoftwareBitmap != null)
             {
-                // InputFrame's raw pixels
+                if (modelBindingComplete && options.PreferredDeviceKind != LearningModelDeviceKindPreview.LearningDeviceCpu)
+                    options.PreferredDeviceKind = LearningModelDeviceKindPreview.LearningDeviceCpu;
+
+                // InputFrame's pixels
                 byte[] inputFrameBytes = new byte[4 * context.InputFrame.SoftwareBitmap.PixelWidth * context.InputFrame.SoftwareBitmap.PixelHeight];
                 context.InputFrame.SoftwareBitmap.CopyToBuffer(inputFrameBytes.AsBuffer());
 
-                using (var inputBitmap = CanvasBitmap.CreateFromBytes(canvasDevice, inputFrameBytes, context.InputFrame.SoftwareBitmap.PixelWidth, context.InputFrame.SoftwareBitmap.PixelHeight,context.InputFrame.SoftwareBitmap.BitmapPixelFormat.ToDirectXPixelFormat()))
-                using (var renderTarget = new CanvasRenderTarget(canvasDevice, context.OutputFrame.SoftwareBitmap.PixelWidth, context.InputFrame.SoftwareBitmap.PixelHeight, (float) context.OutputFrame.SoftwareBitmap.DpiX, context.OutputFrame.SoftwareBitmap.BitmapPixelFormat.ToDirectXPixelFormat(), CanvasAlphaMode.Premultiplied))
+                using (var inputBitmap = CanvasBitmap.CreateFromBytes(canvasDevice, inputFrameBytes, context.InputFrame.SoftwareBitmap.PixelWidth, context.InputFrame.SoftwareBitmap.PixelHeight, context.InputFrame.SoftwareBitmap.BitmapPixelFormat.ToDirectXPixelFormat()))
+                using (var renderTarget = new CanvasRenderTarget(canvasDevice, context.OutputFrame.SoftwareBitmap.PixelWidth, context.InputFrame.SoftwareBitmap.PixelHeight, (float)context.OutputFrame.SoftwareBitmap.DpiX, context.OutputFrame.SoftwareBitmap.BitmapPixelFormat.ToDirectXPixelFormat(), CanvasAlphaMode.Premultiplied))
                 using (var ds = renderTarget.CreateDrawingSession())
                 {
                     ds.DrawImage(inputBitmap);
@@ -119,7 +129,7 @@ namespace TinyYOLO.VideoEffects
         private async void EvaluateVideoFrame(ThreadPoolTimer timer)
         {
             // If a lock is being held, or WinML isn't fully initialized, return
-            if (!semaphore.Wait(0) || isLoadingModel)
+            if (!semaphore.Wait(0) || !modelBindingComplete)
                 return;
 
             try
@@ -129,25 +139,11 @@ namespace TinyYOLO.VideoEffects
                     // ************ WinML Evaluate Frame ************ //
 
                     Debug.WriteLine($"RelativeTime in Seconds: {evaluatableVideoFrame.RelativeTime?.Seconds}");
-
-                    var binding = new LearningModelBindingPreview(model); // Create bindings for the input and output buffer
-                    var outputArray = new List<float>(); // R4 WinML does needs the output pre-allocated for multi-dimensional tensors
-                    outputArray.AddRange(new float[21125]);  // Total size of TinyYOLO output
-
-                    binding.Bind(inputImageDescription.Name, evaluatableVideoFrame);
-                    binding.Bind(outputTensorDescription.Name, outputArray);
-
-                    // Need to figure out a way to make this work here Task.Run or similar, that only updates the value of 
-                    // filteredBoxes when this is done
-                    var results = await model.EvaluateAsync(binding, "TinyYOLO");
-
-                    var resultProbabilities = results.Outputs[outputTensorDescription.Name] as List<float>;
-
-                    // Use out helper to parse to the YOLO outputs into bounding boxes with labels
-                    var boxes = parser.ParseOutputs(resultProbabilities?.ToArray());
-
+                    
+                    await model.EvaluateAsync(binding, "TinyYOLO");
+                    
                     // Remove overlapping and low confidence bounding boxes
-                    filteredBoxes = parser.NonMaxSuppress(boxes, 5, .5F);
+                    filteredBoxes = parser.NonMaxSuppress(parser.ParseOutputs(outputArray.ToArray()), 5, .5F);
 
                     Debug.WriteLine(filteredBoxes.Count <= 0 ? $"No Valid Bounding Boxes" : $"Valid Bounding Boxes: {filteredBoxes.Count}");
 
@@ -172,8 +168,6 @@ namespace TinyYOLO.VideoEffects
 
             Debug.WriteLine($"Loading Model");
 
-            isLoadingModel = true;
-
             try
             {
                 // Load Model
@@ -182,6 +176,10 @@ namespace TinyYOLO.VideoEffects
 
                 model = await LearningModelPreview.LoadModelFromStorageFileAsync(modelFile);
                 Debug.WriteLine($"LearningModelPReview object instantiated: {modelFile.Path}");
+
+                options = model.InferencingOptions;
+                options.PreferredDeviceKind = LearningModelDeviceKindPreview.LearningDeviceGpu;
+                model.InferencingOptions = options;
 
                 // Retrieve model input and output variable descriptions (we already know the model takes an image in and outputs a tensor)
                 var inputFeatures = model.Description.InputFeatures.ToList();
@@ -195,19 +193,34 @@ namespace TinyYOLO.VideoEffects
 
                 outputTensorDescription = outputFeatures.FirstOrDefault(feature => feature.ModelFeatureKind == LearningModelFeatureKindPreview.Tensor)
                     as TensorVariableDescriptorPreview;
+
+                binding = new LearningModelBindingPreview(model); // Create bindings for the input and output buffer
+
+                outputArray = new List<float>(); // R4 WinML does needs the output pre-allocated for multi-dimensional tensors
+                outputArray.AddRange(new float[21125]);  // Total size of TinyYOLO output
+
+                if (inputImageDescription != null && outputTensorDescription != null)
+                {
+                    binding.Bind(inputImageDescription.Name, evaluatableVideoFrame);
+                    binding.Bind(outputTensorDescription.Name, outputArray);
+
+                    modelBindingComplete = true;
+                }
+                else
+                {
+                    modelBindingComplete = false;
+                }
+
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error loading model: {ex.Message}");
                 model = null;
-            }
-            finally
-            {
-                isLoadingModel = false;
+                modelBindingComplete = false;
             }
         }
 
-        
+
         // ********** IBasicVideoEffect Requirements ********** //
 
         public void SetProperties(IPropertySet configuration)
@@ -218,16 +231,14 @@ namespace TinyYOLO.VideoEffects
         public async void SetEncodingProperties(VideoEncodingProperties encodingProperties, IDirect3DDevice device)
         {
             currentEncodingProperties = encodingProperties;
-
-            filteredBoxes = new List<YoloBoundingBox>();
-
-            frameProcessingTimer = ThreadPoolTimer.CreatePeriodicTimer(EvaluateVideoFrame, poolTimerInterval);
-
             canvasDevice = device != null ? CanvasDevice.CreateFromDirect3D11Device(device) : CanvasDevice.GetSharedDevice();
 
             parser = new YoloWinMlParser();
-
+            filteredBoxes = new List<YoloBoundingBox>();
+            
             await LoadModelAsync();
+
+            frameProcessingTimer = ThreadPoolTimer.CreatePeriodicTimer(EvaluateVideoFrame, poolTimerInterval);
         }
 
         public void Close(MediaEffectClosedReason reason)
@@ -236,11 +247,11 @@ namespace TinyYOLO.VideoEffects
             semaphore?.Dispose();
             frameProcessingTimer?.Cancel();
         }
-        
+
         public MediaMemoryTypes SupportedMemoryTypes => EffectConstants.SupportedMemoryTypes;
 
         public IReadOnlyList<VideoEncodingProperties> SupportedEncodingProperties => EffectConstants.SupportedEncodingProperties;
-        
+
         public bool IsReadOnly => false;
         public bool TimeIndependent => false;
         public void DiscardQueuedFrames() { }
