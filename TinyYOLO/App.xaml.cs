@@ -6,6 +6,7 @@ using Windows.System.Display;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Navigation;
+using TinyYOLO.Views;
 
 namespace TinyYOLO
 {
@@ -55,9 +56,12 @@ namespace TinyYOLO
                     // parameter
 
                     // TODO uncomment once navigation between examples is set up
-                    //rootFrame.Navigate(typeof(MainPage), e.Arguments);
+                    //rootFrame.Navigate(typeof(RootPage), e.Arguments);
 
-                    rootFrame.Navigate(typeof(VideoPage), e.Arguments);
+                    rootFrame.Navigate(typeof(MainPage), e.Arguments);
+
+                    //rootFrame.Navigate(typeof(VideoPage), e.Arguments);
+
                 }
                 // Ensure the current window is active
                 Window.Current.Activate();

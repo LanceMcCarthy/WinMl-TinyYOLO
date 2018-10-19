@@ -7,16 +7,18 @@ namespace TinyYOLO.ViewModels
 {
     public class VideoPageViewModel : ViewModelBase
     {
-        private ObservableCollection<VideoEffectItem> videoEffects;
-        private VideoEffectItem selectedEffect;
+        private ObservableCollection<VideoEffectItem> _videoEffects;
+        private VideoEffectItem _selectedEffect;
 
         public VideoPageViewModel()
         {
-            if (DesignMode.DesignModeEnabled)
+            if (DesignMode.DesignModeEnabled || DesignMode.DesignMode2Enabled)
+            {
                 return;
+            }
         }
 
-        public ObservableCollection<VideoEffectItem> VideoEffects => videoEffects ?? (videoEffects = new ObservableCollection<VideoEffectItem>
+        public ObservableCollection<VideoEffectItem> VideoEffects => _videoEffects ?? (_videoEffects = new ObservableCollection<VideoEffectItem>
         {
             new VideoEffectItem(null, "None"),
             new VideoEffectItem(typeof(TinyYoloVideoEffect), "TinyYolo"),
@@ -25,8 +27,8 @@ namespace TinyYOLO.ViewModels
 
         public VideoEffectItem SelectedEffect
         {
-            get => selectedEffect;
-            set => SetProperty(ref selectedEffect, value);
+            get => _selectedEffect;
+            set => SetProperty(ref _selectedEffect, value);
         }
     }
 }

@@ -98,11 +98,12 @@
     <Compile Include="Converters\NullToVisibilityConverter.cs" />
     <Compile Include="Converters\ObjectToFloatConverter.cs" />
     <Compile Include="Helpers\ConcurrentLogger.cs" />
+    <Compile Include="Helpers\DeviceHelpers.cs" />
     <Compile Include="Helpers\FrameGrabber.cs" />
     <Compile Include="Helpers\NewFrameEventArgs.cs" />
     <Compile Include="Helpers\NewResultEventArgs.cs" />
     <Compile Include="Helpers\TaskUtilities.cs" />
-    <Compile Include="MainPage.xaml.cs">
+    <Compile Include="Views\MainPage.xaml.cs">
       <DependentUpon>MainPage.xaml</DependentUpon>
     </Compile>
     <Compile Include="Models\ObservableObject.cs" />
@@ -112,13 +113,16 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Models\TinyYOLO.cs" />
     <Compile Include="TinyYOLO.cs" />
-    <Compile Include="VideoPage.xaml.cs">
+    <Compile Include="Views\VideoPage.xaml.cs">
       <DependentUpon>VideoPage.xaml</DependentUpon>
     </Compile>
     <Compile Include="ViewModels\VideoPageViewModel.cs" />
     <Compile Include="ViewModels\ViewModelBase.cs" />
     <Compile Include="Models\YoloBoundingBox.cs" />
     <Compile Include="Models\YoloWinMlParser.cs" />
+    <Compile Include="Views\RootPage.xaml.cs">
+      <DependentUpon>RootPage.xaml</DependentUpon>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <AppxManifest Include="Package.appxmanifest">
@@ -147,11 +151,15 @@
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
-    <Page Include="MainPage.xaml">
+    <Page Include="Views\MainPage.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
-    <Page Include="VideoPage.xaml">
+    <Page Include="Views\VideoPage.xaml">
+      <SubType>Designer</SubType>
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Include="Views\RootPage.xaml">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>

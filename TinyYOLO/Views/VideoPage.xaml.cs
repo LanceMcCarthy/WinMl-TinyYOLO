@@ -14,22 +14,22 @@ using Windows.UI.Xaml.Navigation;
 using TinyYOLO.Helpers;
 using TinyYOLO.Models;
 
-namespace TinyYOLO
+namespace TinyYOLO.Views
 {
     public sealed partial class VideoPage : Page
     {
         #region Fields
 
         // General
-        private RecordingState currentState = RecordingState.NotInitialized;
+        private RecordingState _currentState = RecordingState.NotInitialized;
 
         // Camera API fields
-        private MediaCapture mediaCapture;
-        private DeviceInformation selectedCamera;
+        private MediaCapture _mediaCapture;
+        private DeviceInformation _selectedCamera;
 
         // Effect fields
-        private IVideoEffectDefinition previewEffect;
-        private IPropertySet effectPropertySet;
+        private IVideoEffectDefinition _previewEffect;
+        private IPropertySet _effectPropertySet;
 
         #endregion
 
@@ -66,20 +66,20 @@ namespace TinyYOLO
             if (string.IsNullOrEmpty(PageViewModel.SelectedEffect.PropertyName))
                 return new VideoEffectDefinition(PageViewModel.SelectedEffect.VideoEffect.FullName);
 
-            effectPropertySet = new PropertySet();
-            effectPropertySet[PageViewModel.SelectedEffect.PropertyName] = PageViewModel.SelectedEffect.PropertyValue;
+            _effectPropertySet = new PropertySet();
+            _effectPropertySet[PageViewModel.SelectedEffect.PropertyName] = PageViewModel.SelectedEffect.PropertyValue;
 
-            return new VideoEffectDefinition(PageViewModel.SelectedEffect.VideoEffect.FullName, effectPropertySet);
+            return new VideoEffectDefinition(PageViewModel.SelectedEffect.VideoEffect.FullName, _effectPropertySet);
         }
 
         private async Task ApplyVideoEffectAsync()
         {
-            if (currentState == RecordingState.Previewing)
+            if (_currentState == RecordingState.Previewing)
             {
-                previewEffect = ConstructVideoEffect();
-                await mediaCapture.AddVideoEffectAsync(previewEffect, MediaStreamType.VideoPreview);
+                _previewEffect = ConstructVideoEffect();
+                await _mediaCapture.AddVideoEffectAsync(_previewEffect, MediaStreamType.VideoPreview);
             }
-            else if (currentState == RecordingState.NotInitialized || currentState == RecordingState.Stopped)
+            else if (_currentState == RecordingState.NotInitialized || _currentState == RecordingState.Stopped)
             {
                 await new MessageDialog("The preview or recording stream is not available.", "Effect not applied").ShowAsync();
             }
@@ -87,8 +87,8 @@ namespace TinyYOLO
 
         private async Task ClearVideoEffectsAsync()
         {
-            await mediaCapture.ClearEffectsAsync(MediaStreamType.VideoPreview);
-            previewEffect = null;
+            await _mediaCapture.ClearEffectsAsync(MediaStreamType.VideoPreview);
+            _previewEffect = null;
         }
         
         #endregion
@@ -102,18 +102,18 @@ namespace TinyYOLO
 
             try
             {
-                currentState = RecordingState.NotInitialized;
+                _currentState = RecordingState.NotInitialized;
 
                 PreviewMediaElement.Source = null;
 
                 ShowBusyIndicator("starting video device...");
 
-                mediaCapture = new MediaCapture();
-                App.MediaCaptureManager = mediaCapture;
+                _mediaCapture = new MediaCapture();
+                App.MediaCaptureManager = _mediaCapture;
 
-                selectedCamera = await FindBestCameraAsync();
+                _selectedCamera = await DeviceHelpers.FindBestCameraAsync();
 
-                if (selectedCamera == null)
+                if (_selectedCamera == null)
                 {
                     await new MessageDialog("There are no cameras connected, please connect a camera and try again.").ShowAsync();
                     await DisposeMediaCaptureAsync();
@@ -121,13 +121,13 @@ namespace TinyYOLO
                     return;
                 }
 
-                await mediaCapture.InitializeAsync(new MediaCaptureInitializationSettings { VideoDeviceId = selectedCamera.Id });
+                await _mediaCapture.InitializeAsync(new MediaCaptureInitializationSettings { VideoDeviceId = _selectedCamera.Id });
 
-                if (mediaCapture.MediaCaptureSettings.VideoDeviceId != "" && mediaCapture.MediaCaptureSettings.AudioDeviceId != "")
+                if (_mediaCapture.MediaCaptureSettings.VideoDeviceId != "" && _mediaCapture.MediaCaptureSettings.AudioDeviceId != "")
                 {
                     ShowBusyIndicator("camera initialized..");
 
-                    mediaCapture.Failed += Failed;
+                    _mediaCapture.Failed += Failed;
                 }
                 else
                 {
@@ -138,10 +138,10 @@ namespace TinyYOLO
 
                 ShowBusyIndicator("starting preview...");
 
-                PreviewMediaElement.Source = mediaCapture;
-                await mediaCapture.StartPreviewAsync();
+                PreviewMediaElement.Source = _mediaCapture;
+                await _mediaCapture.StartPreviewAsync();
 
-                currentState = RecordingState.Previewing;
+                _currentState = RecordingState.Previewing;
 
             }
             catch (UnauthorizedAccessException ex)
@@ -163,7 +163,7 @@ namespace TinyYOLO
                 ShowBusyIndicator("Initialize Video Error");
                 await new MessageDialog("InitializeVideoAsync() Exception\r\n\nError Message: " + ex.Message).ShowAsync();
 
-                currentState = RecordingState.NotInitialized;
+                _currentState = RecordingState.NotInitialized;
                 PreviewMediaElement.Source = null;
             }
             finally
@@ -178,19 +178,19 @@ namespace TinyYOLO
             {
                 ShowBusyIndicator("Freeing up resources...");
 
-                if (currentState == RecordingState.Recording && mediaCapture != null)
+                if (_currentState == RecordingState.Recording && _mediaCapture != null)
                 {
                     ShowBusyIndicator("recording stopped...");
-                    await mediaCapture.StopRecordAsync();
+                    await _mediaCapture.StopRecordAsync();
 
                 }
-                else if (currentState == RecordingState.Previewing && mediaCapture != null)
+                else if (_currentState == RecordingState.Previewing && _mediaCapture != null)
                 {
                     ShowBusyIndicator("video preview stopped...");
-                    await mediaCapture.StopPreviewAsync();
+                    await _mediaCapture.StopPreviewAsync();
                 }
 
-                currentState = RecordingState.Stopped;
+                _currentState = RecordingState.Stopped;
             }
             catch (Exception ex)
             {
@@ -199,11 +199,11 @@ namespace TinyYOLO
             }
             finally
             {
-                if (mediaCapture != null)
+                if (_mediaCapture != null)
                 {
-                    mediaCapture.Failed -= Failed;
-                    mediaCapture.Dispose();
-                    mediaCapture = null;
+                    _mediaCapture.Failed -= Failed;
+                    _mediaCapture.Dispose();
+                    _mediaCapture = null;
                 }
 
                 PreviewMediaElement.Source = null;
@@ -211,27 +211,27 @@ namespace TinyYOLO
             }
         }
 
-        private static async Task<DeviceInformation> FindBestCameraAsync()
-        {
-            var devices = await DeviceInformation.FindAllAsync(DeviceClass.VideoCapture);
+        //private static async Task<DeviceInformation> FindBestCameraAsync()
+        //{
+        //    var devices = await DeviceInformation.FindAllAsync(DeviceClass.VideoCapture);
 
-            Debug.WriteLine($"{devices.Count} devices found");
+        //    Debug.WriteLine($"{devices.Count} devices found");
 
-            // If there are no cameras connected to the device
-            if (devices.Count == 0)
-                return null;
+        //    // If there are no cameras connected to the device
+        //    if (devices.Count == 0)
+        //        return null;
 
-            // If there is only one camera, return that one
-            if (devices.Count == 1)
-                return devices.FirstOrDefault();
+        //    // If there is only one camera, return that one
+        //    if (devices.Count == 1)
+        //        return devices.FirstOrDefault();
 
-            //check if the preferred device is available
-            var frontCamera = devices.FirstOrDefault(
-                x => x.EnclosureLocation != null && x.EnclosureLocation.Panel == Windows.Devices.Enumeration.Panel.Front);
+        //    //check if the preferred device is available
+        //    var frontCamera = devices.FirstOrDefault(
+        //        x => x.EnclosureLocation != null && x.EnclosureLocation.Panel == Windows.Devices.Enumeration.Panel.Front);
 
-            //if front camera is available return it, otherwise pick the first available camera
-            return frontCamera ?? devices.FirstOrDefault();
-        }
+        //    //if front camera is available return it, otherwise pick the first available camera
+        //    return frontCamera ?? devices.FirstOrDefault();
+        //}
 
         private async void Failed(MediaCapture currentCaptureObject, MediaCaptureFailedEventArgs currentFailure)
         {
